@@ -2,8 +2,8 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
-#from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64
+from geometry_msgs.msg import Twist
+#from std_msgs.msg import Float64
 import numpy as np
 import cv2
 import math
@@ -66,6 +66,34 @@ def get_main_path_mask(img, point=(IMAGE_WIDTH//2, IMAGE_HEIGHT-CONTOUR_BOTTOM_O
     return np.zeros(img.shape).astype(np.bool)
 
 
+def steering_angle_to_twist(steering_angle, speed, wheel_base=1.53):
+    """
+    Convert Ackermann steering angle to geometry_msgs/Twist.
+
+    Args:
+        steering_angle (float): Desired steering angle in radians.
+                                Positive = left turn.
+        speed (float): Desired forward speed in m/s.
+        wheel_base (float): Distance between front and rear axle in meters.
+
+    Returns:
+        Twist: ROS Twist command.
+    """
+
+    cmd = Twist()
+
+    # Forward velocity
+    cmd.linear.x = speed
+
+    # Convert steering angle to yaw rate
+    if abs(speed) < 1e-6:
+        cmd.angular.z = 0.0
+    else:
+        cmd.angular.z = speed * math.tan(steering_angle) / wheel_base
+
+    return cmd
+
+
 class ControlNode(Node):
     def __init__(self):
         super().__init__('brc_control')
@@ -80,8 +108,7 @@ class ControlNode(Node):
         self.joint_sub = self.create_subscription(
             JointState, 'joint_states', self.joint_cb, 10)
 
-        self.steer_pub = self.create_publisher(Float64, 'brc19/steer_angle', 10)
-        self.wheel_pub = self.create_publisher(Float64, 'brc19/wheel_cmd_vel', 10)
+        self.cmd_pub = self.create_publisher(Twist, 'brc19/cmd_vel', 10)
 
         # 50 Hz control loop
         self.timer = self.create_timer(1.0 / 50.0, self.control_loop)
@@ -100,14 +127,10 @@ class ControlNode(Node):
             idx = msg.name.index('wheel_fr_joint')
             self.wheel_fr_vel = msg.velocity[idx]
 
-    def publish_commands(self, steering_angle: float, wheel_velocity: float):
-        steer_msg = Float64()
-        steer_msg.data = steering_angle
-        self.steer_pub.publish(steer_msg)
+    def publish_commands(self, steering_angle: float, speed: float):
+        twist = steering_angle_to_twist(steering_angle=steering_angle, speed=speed)
 
-        wheel_msg = Float64()
-        wheel_msg.data = wheel_velocity
-        self.wheel_pub.publish(wheel_msg)
+        self.cmd_pub.publish(twist)
 
     def control_loop(self):
         if self.label_map is None:
@@ -118,16 +141,17 @@ class ControlNode(Node):
         resized = cv2.resize(self.label_map, (218,218), dst=None, fx=None, fy=None, interpolation=cv2.INTER_LINEAR)
 
         mask = get_main_path_mask(resized)
-        steering_point, dist = steering_point_from_topdown(mask, distance=48)
+        steering_point, dist = steering_point_from_topdown(mask, distance=32)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         print(steering_point, dist, angle)
+        self.steering_angle = ((angle)/-150.0) / (1.0 / 50.0)
 
         # test prints for later control
         velocity_current = (self.wheel_fl_vel + self.wheel_fr_vel) / 2.0
         #print(velocity_current)
         #print(np.max(self.label_map[...,0] == 2))
 
-        self.publish_commands(steering_angle=((angle)/-150.0), wheel_velocity=10.0)
+        self.publish_commands(steering_angle=((angle)/-150.0), speed=3.0)
 
 
 def main():
