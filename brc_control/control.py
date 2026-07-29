@@ -3,13 +3,15 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 #from std_msgs.msg import Float64
 import numpy as np
 import cv2
 import math
 
 
-from brc_control.helpers import steering_point_from_topdown, calculate_angle
+from brc_control.helpers import steering_point_from_topdown, calculate_angle, speed_from_topdown
+from brc_control.sensors import VirtualDistanceSensor
 
 
 IMAGE_WIDTH = 218
@@ -161,6 +163,7 @@ class ControlNode(Node):
         self.label_map = None
         self.wheel_fl_vel = None
         self.wheel_fr_vel = None
+        self.speed = None
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -168,14 +171,19 @@ class ControlNode(Node):
         self.joint_sub = self.create_subscription(
             JointState, 'joint_states', self.joint_cb, 1)
 
+        self.odom_sub = self.create_subscription(
+            Odometry, 'brc19/odometry', self.odom_cb, 1)
+
         self.cmd_pub = self.create_publisher(Twist, 'brc19/cmd_vel', 1)
 
         # 50 Hz control loop
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
-        #self.steering_pid = PIDController(0.008, 0.000005, 0.0, 0.0)
-        #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
-        self.steering_pid = PIDController(0.4, 0.0, 0.0005, 0.0)
+        self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
+
+        self.velocity_pid = PIDController(1.0, 0.0, 0.0, 0.0)
+        
+        self.distance_sensor = VirtualDistanceSensor()
 
     def image_cb(self, msg: Image):
         try:
@@ -191,6 +199,11 @@ class ControlNode(Node):
             idx = msg.name.index('wheel_fr_joint')
             self.wheel_fr_vel = msg.velocity[idx]
 
+    def odom_cb(self, msg: Odometry):
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        self.speed = (vx**2 + vy**2) ** 0.5
+
     def publish_commands(self, steering_angle: float, speed: float):
         twist = steering_angle_to_twist(steering_angle=steering_angle, speed=speed)
 
@@ -202,21 +215,19 @@ class ControlNode(Node):
         if self.wheel_fl_vel is None or self.wheel_fr_vel is None:
             return
 
-        resized = self.label_map#cv2.resize(self.label_map, (218,218), dst=None, fx=None, fy=None, interpolation=cv2.INTER_LINEAR)
+        resized = self.label_map
 
         mask = get_main_path_mask(resized)
         steering_point, dist = steering_point_from_topdown(mask, distance=26)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
-        pid_out = self.steering_pid.update(angle)
-        print(angle, pid_out)
+        pid_out_steer = self.steering_pid.update(angle)
+        speed = speed_from_topdown(self.distance_sensor, mask)
+        self.velocity_pid.set_setpoint(speed)
+        pid_out_vel = self.velocity_pid.update(self.speed)
+        print(angle, pid_out_steer, self.speed, pid_out_vel)
 
-        # test prints for later control
-        velocity_current = (self.wheel_fl_vel + self.wheel_fr_vel) / 2.0
-        #print(velocity_current)
-        #print(np.max(self.label_map[...,0] == 2))
-
-        self.publish_commands(steering_angle=pid_out, speed=2.5) # ((angle)/-150.0)
+        self.publish_commands(steering_angle=pid_out_steer, speed=pid_out_vel)
 
 
 def main():

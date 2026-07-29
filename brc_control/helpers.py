@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 
+from brc_control.sensors import VirtualDistanceSensor
+
 def filter_outliers_along_path_simplified(points, distance_threshold=5.0):
     if not points:
         return []
@@ -59,3 +61,18 @@ def steering_point_from_topdown(track, distance_threshold=20, distance=32):
     center_points_t = filter_outliers_along_path_simplified(center_points_t, distance_threshold=distance_threshold)
     point, point_dist = get_nearest_coordinates_at_distance(center_points_t, distance=distance)
     return point, point_dist
+
+def calculate_max_target_speed(distance, max_deceleration, min_speed):
+    initial_speed = min_speed / 3.6  # Convert minimum speed from km/h to m/s
+    max_speed_squared = (initial_speed ** 2) - (2 * -max_deceleration * distance)
+    
+    if max_speed_squared < 0:
+        return 0
+    else:
+        max_speed = max_speed_squared ** 0.5
+        return max_speed
+
+def speed_from_topdown(sensor: VirtualDistanceSensor, img):
+    dists = sensor.getDistances(image=img)
+    speed = calculate_max_target_speed(max(dists[8], 0.0), 4.5, 0.0)
+    return speed#max(speeds) * 3.6
