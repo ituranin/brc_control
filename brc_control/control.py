@@ -14,8 +14,8 @@ from brc_control.helpers import steering_point_from_topdown, calculate_angle, sp
 from brc_control.sensors import VirtualDistanceSensor
 
 
-IMAGE_WIDTH = 218
-IMAGE_HEIGHT = 218
+IMAGE_WIDTH = 384
+IMAGE_HEIGHT = 384
 CONTOUR_BOTTOM_OFFSET = 1
 
 
@@ -164,7 +164,6 @@ class ControlNode(Node):
         self.wheel_fl_vel = None
         self.wheel_fr_vel = None
         self.speed = None
-        self.old_pid = 0.0
         self.old_angle = 0.0
 
         self.image_sub = self.create_subscription(
@@ -186,7 +185,7 @@ class ControlNode(Node):
 
         self.velocity_pid = PIDController(0.9, 0.0, 0.0, 0.0)
         
-        self.distance_sensor = VirtualDistanceSensor()
+        self.distance_sensor = VirtualDistanceSensor(384)
 
     def image_cb(self, msg: Image):
         try:
@@ -221,17 +220,23 @@ class ControlNode(Node):
         resized = self.label_map
 
         mask = get_main_path_mask(resized)
-        steering_point, dist = steering_point_from_topdown(mask, distance=26)
+        steering_point, dist, line = steering_point_from_topdown(mask, distance=32)
+        #line = line.astype(np.uint8) * 255
+        #cv2.circle(line, (int(steering_point[0]), int(steering_point[1])), radius=10, color=255, thickness=-1)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
+
+        if (abs(angle - self.old_angle) > 0.1):
+            #cv2.imwrite('/mnt/SSDDATA/test.png', line)
+            print(angle, self.old_angle, dist)
+
+        self.old_angle = angle
+
         pid_out_steer = self.steering_pid.update(angle)
+
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
         pid_out_vel = self.velocity_pid.update(self.speed)
-        if (abs(self.old_pid - pid_out_steer) > 0.1):
-            print(angle, self.old_angle, pid_out_steer, self.old_pid, dist)#, self.speed, pid_out_vel)
-        self.old_pid = pid_out_steer
-        self.old_angle = angle
 
         self.publish_commands(steering_angle=pid_out_steer, speed=2.0)
 
