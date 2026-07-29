@@ -12,6 +12,7 @@ import math
 
 from brc_control.helpers import steering_point_from_topdown, calculate_angle, speed_from_topdown
 from brc_control.sensors import VirtualDistanceSensor
+from brc_control.stopwatch import StopWatch
 
 
 IMAGE_WIDTH = 384
@@ -165,6 +166,8 @@ class ControlNode(Node):
         self.wheel_fr_vel = None
         self.speed = None
         self.old_angle = 0.0
+        self.old_point = None
+        self.stopwatch = StopWatch()
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -181,7 +184,7 @@ class ControlNode(Node):
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
         #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
-        self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
+        self.steering_pid = PIDController(0.6, 0.0, 0.0, 0.0)
 
         self.velocity_pid = PIDController(0.9, 0.0, 0.0, 0.0)
         
@@ -220,7 +223,9 @@ class ControlNode(Node):
         resized = self.label_map
 
         mask = get_main_path_mask(resized)
+        #self.stopwatch.start()
         steering_point, dist, line = steering_point_from_topdown(mask, distance=32)
+        #print(self.stopwatch.stop())
         #line = line.astype(np.uint8) * 255
         #cv2.circle(line, (int(steering_point[0]), int(steering_point[1])), radius=10, color=255, thickness=-1)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
@@ -228,9 +233,10 @@ class ControlNode(Node):
 
         if (abs(angle - self.old_angle) > 0.1):
             #cv2.imwrite('/mnt/SSDDATA/test.png', line)
-            print(angle, self.old_angle, dist)
+            print(angle, self.old_angle, dist, steering_point, self.old_point)
 
         self.old_angle = angle
+        self.old_point = steering_point
 
         pid_out_steer = self.steering_pid.update(angle)
 
