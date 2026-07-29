@@ -14,7 +14,7 @@ from brc_control.helpers import steering_point_from_topdown, calculate_angle
 
 IMAGE_WIDTH = 218
 IMAGE_HEIGHT = 218
-CONTOUR_BOTTOM_OFFSET = 2
+CONTOUR_BOTTOM_OFFSET = 1
 
 
 # encoding -> (numpy dtype, channels)
@@ -60,10 +60,10 @@ def get_main_path_mask(img, point=(IMAGE_WIDTH//2, IMAGE_HEIGHT-CONTOUR_BOTTOM_O
     mask = np.zeros(img.shape).astype(np.uint8)
     for contour in contours:
         result = cv2.pointPolygonTest(contour, point, False)
-        if result > 0:
+        if result >= 0:
             cv2.fillPoly(mask, pts=[contour], color=(255,255,255))
             return mask[...,0] > 0
-    return np.zeros(img.shape).astype(np.bool)
+    return np.zeros((IMAGE_WIDTH, IMAGE_HEIGHT)).astype(np.uint8)
 
 
 def steering_angle_to_twist(steering_angle, speed, wheel_base=1.53):
@@ -171,9 +171,11 @@ class ControlNode(Node):
         self.cmd_pub = self.create_publisher(Twist, 'brc19/cmd_vel', 1)
 
         # 50 Hz control loop
-        self.timer = self.create_timer(1.0 / 50.0, self.control_loop)
+        self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
-        self.steering_pid = PIDController(0.008, 0.000004, 0.03, 0.0)
+        #self.steering_pid = PIDController(0.008, 0.000005, 0.0, 0.0)
+        #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
+        self.steering_pid = PIDController(0.4, 0.0, 0.0005, 0.0)
 
     def image_cb(self, msg: Image):
         try:
@@ -205,15 +207,16 @@ class ControlNode(Node):
         mask = get_main_path_mask(resized)
         steering_point, dist = steering_point_from_topdown(mask, distance=26)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
+        angle = math.radians(angle)
         pid_out = self.steering_pid.update(angle)
-        print(steering_point, dist, pid_out)
+        print(angle, pid_out)
 
         # test prints for later control
         velocity_current = (self.wheel_fl_vel + self.wheel_fr_vel) / 2.0
         #print(velocity_current)
         #print(np.max(self.label_map[...,0] == 2))
 
-        self.publish_commands(steering_angle=pid_out, speed=3.0) # ((angle)/-150.0)
+        self.publish_commands(steering_angle=pid_out, speed=2.5) # ((angle)/-150.0)
 
 
 def main():
