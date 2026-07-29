@@ -164,6 +164,8 @@ class ControlNode(Node):
         self.wheel_fl_vel = None
         self.wheel_fr_vel = None
         self.speed = None
+        self.old_pid = 0.0
+        self.old_angle = 0.0
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -179,9 +181,10 @@ class ControlNode(Node):
         # 50 Hz control loop
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
+        #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
         self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
 
-        self.velocity_pid = PIDController(1.0, 0.0, 0.0, 0.0)
+        self.velocity_pid = PIDController(0.9, 0.0, 0.0, 0.0)
         
         self.distance_sensor = VirtualDistanceSensor()
 
@@ -225,9 +228,12 @@ class ControlNode(Node):
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
         pid_out_vel = self.velocity_pid.update(self.speed)
-        print(angle, pid_out_steer, self.speed, pid_out_vel)
+        if (abs(self.old_pid - pid_out_steer) > 0.1):
+            print(angle, self.old_angle, pid_out_steer, self.old_pid, dist)#, self.speed, pid_out_vel)
+        self.old_pid = pid_out_steer
+        self.old_angle = angle
 
-        self.publish_commands(steering_angle=pid_out_steer, speed=pid_out_vel)
+        self.publish_commands(steering_angle=pid_out_steer, speed=2.0)
 
 
 def main():
