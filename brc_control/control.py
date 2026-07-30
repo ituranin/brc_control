@@ -184,7 +184,7 @@ class ControlNode(Node):
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
         #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
-        self.steering_pid = PIDController(0.6, 0.0, 0.0, 0.0)
+        self.steering_pid = PIDController(0.4, 0.0, 0.0, 0.0)
 
         self.velocity_pid = PIDController(0.9, 0.0, 0.0, 0.0)
         
@@ -224,15 +224,15 @@ class ControlNode(Node):
 
         mask = get_main_path_mask(resized)
         #self.stopwatch.start()
-        steering_point, dist, line = steering_point_from_topdown(mask, distance=32)
+        steering_point, dist, line = steering_point_from_topdown(mask, distance=60)
         #print(self.stopwatch.stop())
         #line = line.astype(np.uint8) * 255
-        #cv2.circle(line, (int(steering_point[0]), int(steering_point[1])), radius=10, color=255, thickness=-1)
+        #cv2.circle(line, (int(steering_point[0]), int(steering_point[1])), radius=2, color=150, thickness=-1)
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
 
         if (abs(angle - self.old_angle) > 0.1):
-            #cv2.imwrite('/mnt/SSDDATA/test.png', line)
+            cv2.imwrite('/mnt/SSDDATA/test.png', line)
             print(angle, self.old_angle, dist, steering_point, self.old_point)
 
         self.old_angle = angle
@@ -244,7 +244,7 @@ class ControlNode(Node):
         self.velocity_pid.set_setpoint(speed)
         pid_out_vel = self.velocity_pid.update(self.speed)
 
-        self.publish_commands(steering_angle=pid_out_steer, speed=2.0)
+        self.publish_commands(steering_angle=pid_out_steer, speed=3.0)
 
 
 def main():
