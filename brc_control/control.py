@@ -167,6 +167,7 @@ class ControlNode(Node):
         self.speed = None
         self.old_angle = 0.0
         self.old_point = None
+        self.v_cmd = 0.0
         self.stopwatch = StopWatch()
 
         self.image_sub = self.create_subscription(
@@ -186,7 +187,7 @@ class ControlNode(Node):
         #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
         self.steering_pid = PIDController(0.325, 0.0, 0.2, 0.0)
 
-        self.velocity_pid = PIDController(0.9, 0.0, 0.0, 0.0)
+        self.velocity_pid = PIDController(0.8, 0.0, 0.0, 0.0)
         
         self.distance_sensor = VirtualDistanceSensor(384)
 
@@ -240,9 +241,12 @@ class ControlNode(Node):
 
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
-        pid_out_vel = self.velocity_pid.update(self.speed)
+        v_pid = self.velocity_pid.update(self.speed)
+        v_pid = np.clip(v_pid, -4.5, 1.0)
+        self.v_cmd += v_pid * (1.0 / 30.0)
+        #print(speed, self.speed, v_pid, self.v_cmd)
 
-        self.publish_commands(steering_angle=pid_out_steer, speed=3.0)
+        self.publish_commands(steering_angle=pid_out_steer, speed=self.v_cmd)
 
 
 def main():
