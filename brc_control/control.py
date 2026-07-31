@@ -202,11 +202,11 @@ class ControlNode(Node):
 
         mask = get_main_path_mask(resized)
         #self.stopwatch.start()
-        steering_point, dist, line = steering_point_from_topdown(mask, distance=60)
+        steering_point, dist, line = steering_point_from_topdown(mask, distance=70)
         #print(self.stopwatch.stop())
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
-
+        #cv2.imwrite('/mnt/SSDDATA/test.png', line)
         if (abs(angle - self.old_angle) > 0.1):
             #cv2.imwrite('/mnt/SSDDATA/test.png', line)
             print(angle, self.old_angle, dist, steering_point, self.old_point)

@@ -57,81 +57,68 @@ def calculate_angle(origin, point):
 
     return np.degrees(np.arctan2(dx, -dy))
 
-def follow_centerline_grid(mask, start_xy, step=15, search_width=50, grid_step=10, max_steps=100):
-    # made with chatgpt based on an idea i had
+def _find_center_at(mask, prediction, perp, search_width, grid_step, r=10):
     h, w = mask.shape
+    best_score = -1
+    best_point = None
 
+    for offset in np.arange(-search_width, search_width + 1, grid_step):
+        candidate = prediction + perp * offset
+        x, y = candidate.astype(int)
+
+        if x < 0 or x >= w or y < 0 or y >= h:
+            continue
+
+        x0, x1 = max(0, x - r), min(w, x + r)
+        y0, y1 = max(0, y - r), min(h, y + r)
+
+        score = np.count_nonzero(mask[y0:y1, x0:x1])
+
+        if score > best_score:
+            best_score = score
+            best_point = candidate
+
+    if best_point is None:
+        return None
+
+    x, y = best_point.astype(int)
+    x0, x1 = max(0, x - r), min(w, x + r)
+    y0, y1 = max(0, y - r), min(h, y + r)
+    roi = mask[y0:y1, x0:x1]
+    ys, xs = np.where(roi)
+
+    if len(xs):
+        return np.array([x0 + xs.mean(), y0 + ys.mean()])
+    else:
+        return best_point
+
+
+def follow_centerline_grid(mask, start_xy, step=15, search_width=50, grid_step=10, max_steps=100):
     center = np.array(start_xy, dtype=float)
     direction = np.array([0.0, -1.0])
+
+    # snap the first point sideways onto the path, no forward movement
+    perp = np.array([-direction[1], direction[0]])
+    snapped = _find_center_at(mask, center, perp, search_width, grid_step)
+    if snapped is not None:
+        center = snapped
 
     path = [center.copy()]
 
     for _ in range(max_steps):
-
-        # perpendicular direction
         perp = np.array([-direction[1], direction[0]])
-
-        # predicted point forward
         prediction = center + direction * step
 
-        best_score = -1
-        best_point = None
-
-        # search only sideways
-        for offset in np.arange(-search_width, search_width+1, grid_step):
-
-            candidate = prediction + perp * offset
-
-            x, y = candidate.astype(int)
-
-            if x < 0 or x >= w or y < 0 or y >= h:
-                continue
-
-            r = 10
-            x0 = max(0, x-r)
-            x1 = min(w, x+r)
-            y0 = max(0, y-r)
-            y1 = min(h, y+r)
-
-            score = np.count_nonzero(mask[y0:y1, x0:x1])
-
-            if score > best_score:
-                best_score = score
-                best_point = candidate
-
-
-        if best_point is None:
+        new_point = _find_center_at(mask, prediction, perp, search_width, grid_step)
+        if new_point is None:
             break
 
-
-        # center only on detected pixels
-        x, y = best_point.astype(int)
-
-        r = 10
-        roi = mask[max(0,y-r):min(h,y+r),
-                   max(0,x-r):min(w,x+r)]
-
-        ys, xs = np.where(roi)
-
-        if len(xs):
-            new_point = np.array([
-                max(0,x-r)+xs.mean(),
-                max(0,y-r)+ys.mean()
-            ])
-        else:
-            new_point = best_point
-
-
-        # update direction
         movement = new_point - center
-
         if np.linalg.norm(movement) > 1e-6:
             direction = movement / np.linalg.norm(movement)
 
         center = new_point
         path.append(center.copy())
-
-    path = path[1:]
 
     return np.array(path)
 
@@ -140,7 +127,7 @@ def steering_point_from_topdown(track, distance=32, debug=False):
     dist = cv2.distanceTransform(trackU, cv2.DIST_L2, 3)
     local_maxima_test = (cv2.compare(dist, cv2.dilate(dist, None), cv2.CMP_EQ) > 0)
     center_line = (trackU > 0) & local_maxima_test
-    center_points_t = follow_centerline_grid(center_line, (384//2, 384-10), max_steps=10, search_width=40, step=20, grid_step=10)
+    center_points_t = follow_centerline_grid(center_line, (384//2, 384), max_steps=10, search_width=40, step=20, grid_step=10)
     point_dist = 0.0
     degree = 3
     point = steering_point_from_parametric_fit(center_points_t, 384, distance, degree)
