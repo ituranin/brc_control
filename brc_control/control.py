@@ -69,34 +69,6 @@ def get_main_path_mask(img, point=(IMAGE_WIDTH//2, IMAGE_HEIGHT-CONTOUR_BOTTOM_O
     return np.zeros((IMAGE_WIDTH, IMAGE_HEIGHT)).astype(np.uint8)
 
 
-def steering_angle_to_twist(steering_angle, speed, wheel_base=1.53):
-    """
-    Convert Ackermann steering angle to geometry_msgs/Twist.
-
-    Args:
-        steering_angle (float): Desired steering angle in radians.
-                                Positive = left turn.
-        speed (float): Desired forward speed in m/s.
-        wheel_base (float): Distance between front and rear axle in meters.
-
-    Returns:
-        Twist: ROS Twist command.
-    """
-
-    cmd = Twist()
-
-    # Forward velocity
-    cmd.linear.x = speed
-
-    # Convert steering angle to yaw rate
-    if abs(speed) < 1e-6:
-        cmd.angular.z = 0.0
-    else:
-        cmd.angular.z = speed * math.tan(steering_angle) / wheel_base
-
-    return cmd
-
-
 class PIDController:
     def __init__(self, kp, ki, kd, setpoint = 0):
 
@@ -168,6 +140,7 @@ class ControlNode(Node):
         self.old_angle = 0.0
         self.old_point = None
         self.v_cmd = 0.0
+        self.steer_cmd = 0.0
         self.stopwatch = StopWatch()
 
         self.image_sub = self.create_subscription(
@@ -185,7 +158,7 @@ class ControlNode(Node):
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
         #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
-        self.steering_pid = PIDController(0.325, 0.0, 0.2, 0.0)
+        self.steering_pid = PIDController(0.6, 0.0, 0.0, 0.0)
 
         self.velocity_pid = PIDController(0.8, 0.0, 0.0, 0.0)
         
@@ -211,9 +184,13 @@ class ControlNode(Node):
         self.speed = (vx**2 + vy**2) ** 0.5
 
     def publish_commands(self, steering_angle: float, speed: float):
-        twist = steering_angle_to_twist(steering_angle=steering_angle, speed=speed)
+        cmd = Twist()
+        
+        cmd.linear.x = speed
 
-        self.cmd_pub.publish(twist)
+        cmd.angular.z = steering_angle
+
+        self.cmd_pub.publish(cmd)
 
     def control_loop(self):
         if self.label_map is None:
@@ -238,6 +215,8 @@ class ControlNode(Node):
         self.old_point = steering_point
 
         pid_out_steer = self.steering_pid.update(angle)
+        pid_out_steer = np.clip(pid_out_steer, -0.6, 0.6)
+        self.steer_cmd = -pid_out_steer * (1.0 / 30.0)
 
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
@@ -245,8 +224,9 @@ class ControlNode(Node):
         v_pid = np.clip(v_pid, -4.5, 1.0)
         self.v_cmd += v_pid * (1.0 / 30.0)
         #print(speed, self.speed, v_pid, self.v_cmd)
+        #print(angle, pid_out_steer)
 
-        self.publish_commands(steering_angle=pid_out_steer, speed=self.v_cmd)
+        self.publish_commands(steering_angle=pid_out_steer, speed=3.0)
 
 
 def main():

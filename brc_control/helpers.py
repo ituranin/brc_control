@@ -191,6 +191,8 @@ def calculate_max_target_speed(distance, max_deceleration, min_speed):
 
 def speed_from_topdown(sensor: VirtualDistanceSensor, img):
     dists = sensor.getDistances(image=img)
-    dist = dists[8] - 10.0
-    speed = calculate_max_target_speed(max(dist, 0.0), 4.5, 10.0)
+    l = len(dists)
+    mid = l // 2
+    dist = np.min(dists[mid]) - 7.0
+    speed = calculate_max_target_speed(max(dist, 0.0), 4.5, (3.0*3.6))
     return speed#max(speeds) * 3.6
