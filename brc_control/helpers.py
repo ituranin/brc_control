@@ -23,41 +23,33 @@ def steering_point_from_parametric_fit(center_points_t, image_height, distance, 
         return None
 
     pts = np.array(center_points_t, dtype=np.float64)
-
-    # order points along the path — arc-length parameterization requires
-    # them in path order, not fitting order. If your points already come
-    # in path order (e.g. from follow_centerline_grid), skip re-sorting.
     xs, ys = pts[:, 0], pts[:, 1]
 
-    # cumulative arc length as the parameter t
+    # cumulative arc length as the parameter t (in pixels)
     deltas = np.diff(pts, axis=0)
     seg_lengths = np.sqrt((deltas ** 2).sum(axis=1))
     t = np.concatenate([[0], np.cumsum(seg_lengths)])
 
-    if t[-1] == 0:
+    total_length = t[-1]
+    if total_length == 0:
         return None  # all points coincide
 
-    # normalize t to [0, 1] for numerical stability in polyfit
-    t_norm = t / t[-1]
+    t_norm = t / total_length
 
     coeffs_x = np.polyfit(t_norm, xs, degree)
     coeffs_y = np.polyfit(t_norm, ys, degree)
     poly_x = np.poly1d(coeffs_x)
     poly_y = np.poly1d(coeffs_y)
 
-    # find target_t such that poly_y(target_t) == target_y
-    # (poly_y isn't invertible in closed form for degree > 1, so sample
-    # densely and pick the closest match)
-    target_y = image_height - distance
-    t_samples = np.linspace(0, 1, 200)
-    y_samples = poly_y(t_samples)
-    closest_idx = np.argmin(np.abs(y_samples - target_y))
-    target_t = t_samples[closest_idx]
+    # distance is arc length in pixels along the path from the first point.
+    # clamp so we don't extrapolate wildly past the fitted data if the
+    # lookahead exceeds the available path length.
+    target_t_norm = np.clip(distance / total_length, 0.0, 1.0)
 
-    target_x = poly_x(target_t)
-    target_y_actual = poly_y(target_t)  # may differ slightly from target_y
+    target_x = poly_x(target_t_norm)
+    target_y = poly_y(target_t_norm)
 
-    return (float(target_x), float(target_y_actual))
+    return (float(target_x), float(target_y))
 
 def calculate_angle(origin, point):
     dx = point[0] - origin[0]
