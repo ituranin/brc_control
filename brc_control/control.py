@@ -202,7 +202,7 @@ class ControlNode(Node):
 
         mask = get_main_path_mask(resized)
         #self.stopwatch.start()
-        steering_point, dist, line = steering_point_from_topdown(mask, distance=70)
+        steering_point, offset_point, line = steering_point_from_topdown(mask, distance=70)
         #print(self.stopwatch.stop())
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
@@ -213,6 +213,13 @@ class ControlNode(Node):
 
         self.old_angle = angle
         self.old_point = steering_point
+
+        offset = (offset_point[0] - (IMAGE_WIDTH//2)) * (30.0 / 384.0)
+
+        #stanley
+        k = 1.0
+        vel = 3.0
+        stanley_out = angle + math.atan((k * offset) / vel)
 
         pid_out_steer = self.steering_pid.update(angle)
         pid_out_steer = np.clip(pid_out_steer, -0.6, 0.6)
@@ -226,7 +233,7 @@ class ControlNode(Node):
         #print(speed, self.speed, v_pid, self.v_cmd)
         #print(angle, pid_out_steer)
 
-        self.publish_commands(steering_angle=pid_out_steer, speed=3.0)
+        self.publish_commands(steering_angle=-stanley_out, speed=vel)
 
 
 def main():
