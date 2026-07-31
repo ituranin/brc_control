@@ -209,7 +209,7 @@ class ControlNode(Node):
         #cv2.imwrite('/mnt/SSDDATA/test.png', line)
         if (abs(angle - self.old_angle) > 0.1):
             #cv2.imwrite('/mnt/SSDDATA/test.png', line)
-            print(angle, self.old_angle, dist, steering_point, self.old_point)
+            print(angle, self.old_angle, steering_point, self.old_point)
 
         self.old_angle = angle
         self.old_point = steering_point
