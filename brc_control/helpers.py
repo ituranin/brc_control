@@ -127,7 +127,7 @@ def steering_point_from_topdown(track, distance=32, debug=False):
     dist = cv2.distanceTransform(trackU, cv2.DIST_L2, 3)
     local_maxima_test = (cv2.compare(dist, cv2.dilate(dist, None), cv2.CMP_EQ) > 0)
     center_line = (trackU > 0) & local_maxima_test
-    center_points_t = follow_centerline_grid(center_line, (384//2, 384), max_steps=10, search_width=40, step=20, grid_step=10)
+    center_points_t = follow_centerline_grid(center_line, (384//2, 384-1), max_steps=10, search_width=40, step=20, grid_step=10)
     degree = 3
     point = steering_point_from_parametric_fit(center_points_t, 384, distance, degree)
     

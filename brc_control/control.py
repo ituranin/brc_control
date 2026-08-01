@@ -157,9 +157,6 @@ class ControlNode(Node):
         # 50 Hz control loop
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
 
-        #self.steering_pid = PIDController(0.4, 0.00005, 0.0, 0.0)
-        self.steering_pid = PIDController(0.6, 0.0, 0.0, 0.0)
-
         self.velocity_pid = PIDController(0.8, 0.0, 0.0, 0.0)
         
         self.distance_sensor = VirtualDistanceSensor(384)
@@ -214,16 +211,14 @@ class ControlNode(Node):
         self.old_angle = angle
         self.old_point = steering_point
 
-        offset = (offset_point[0] - (IMAGE_WIDTH//2)) * (30.0 / 384.0)
+        #offset = (offset_point[0] - (IMAGE_WIDTH//2)) * (30.0 / 384.0)
+        #print(offset)
 
         #stanley
-        k = 1.0
         vel = 3.0
-        stanley_out = angle + math.atan((k * offset) / vel)
-
-        pid_out_steer = self.steering_pid.update(angle)
-        pid_out_steer = np.clip(pid_out_steer, -0.6, 0.6)
-        self.steer_cmd = -pid_out_steer * (1.0 / 30.0)
+        distance = 50.0 * (30.0 / 384.0) # pixels to meters
+        wheelbase = 1.53
+        pp_out = math.atan2(2 * wheelbase * math.sin(angle), distance)
 
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
@@ -233,7 +228,7 @@ class ControlNode(Node):
         #print(speed, self.speed, v_pid, self.v_cmd)
         #print(angle, pid_out_steer)
 
-        self.publish_commands(steering_angle=-stanley_out, speed=vel)
+        self.publish_commands(steering_angle=-pp_out, speed=vel)
 
 
 def main():
