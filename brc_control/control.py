@@ -13,6 +13,9 @@ import math
 from brc_control.helpers import steering_point_from_topdown, calculate_angle, speed_from_topdown
 from brc_control.sensors import VirtualDistanceSensor
 from brc_control.stopwatch import StopWatch
+from brc_control.controller.pid import PIDController
+from brc_control.controller.dyn_pure_pursuit import DynamicPurePursuit
+from brc_control.controller.pure_pursuit import PurePursuit
 
 
 IMAGE_WIDTH = 384
@@ -69,66 +72,6 @@ def get_main_path_mask(img, point=(IMAGE_WIDTH//2, IMAGE_HEIGHT-CONTOUR_BOTTOM_O
     return np.zeros((IMAGE_WIDTH, IMAGE_HEIGHT)).astype(np.uint8)
 
 
-class PIDController:
-    def __init__(self, kp, ki, kd, setpoint = 0):
-
-        self.kp = kp  # Proportional gain
-        self.ki = ki  # Integral gain
-        self.kd = kd  # Derivative gain
-        self.setpoint = setpoint  # Desired value
-
-        # Internal variables to store PID computations
-        self._previous_error = 0.0
-        self._integral = 0.0
-        self.p_term = 0.0
-        self.i_term = 0.0
-        self.d_term = 0.0
-
-    def update(self, current_value):
-        # Calculate error
-        error = self.setpoint - current_value
-        
-        # Proportional term
-        p_term = self.kp * error
-        
-        # Integral term
-        self._integral += error
-        i_term = self.ki * self._integral
-        
-        # Derivative term
-
-        derivative = (error - self._previous_error)
-        d_term = self.kd * derivative
-       
-        # Update previous error for next iteration
-        self._previous_error = error
-        
-        # Control output
-        control_output = p_term + i_term + d_term
-        self.p_term = p_term
-        self.i_term = i_term
-        self.d_term = d_term
-        return control_output
-
-    def reset_controller(self):
-        self._previous_error = 0.0
-        self._integral = 0.0
-
-    def set_setpoint(self, setpoint):
-        self.setpoint = setpoint
-
-    def get_gains(self):
-        return self.kp, self.ki, self.kd 
-    
-    def set_gains(self, kp=None, ki=None, kd=None):
-        if kp is not None:
-            self.kp = kp
-        if ki is not None:
-            self.ki = ki
-        if kd is not None:
-            self.kd = kd
-
-
 class ControlNode(Node):
     def __init__(self):
         super().__init__('brc_control')
@@ -142,6 +85,7 @@ class ControlNode(Node):
         self.v_cmd = 0.0
         self.steer_cmd = 0.0
         self.stopwatch = StopWatch()
+        self.lat_ctrl = PurePursuit(look_ahead_distance=(50.0 * (30.0 / 384.0)), wheelbase=1.53) # look ahead distance calc is pixels to meters
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -214,11 +158,12 @@ class ControlNode(Node):
         #offset = (offset_point[0] - (IMAGE_WIDTH//2)) * (30.0 / 384.0)
         #print(offset)
 
-        #stanley
+        # Select control strategy
+        ## Longitudinal control (velocity/acceleration)
         vel = 3.0
-        distance = 50.0 * (30.0 / 384.0) # pixels to meters
-        wheelbase = 1.53
-        pp_out = math.atan2(2 * wheelbase * math.sin(angle), distance)
+
+        ## Lateral control (steering)
+        pp_out = self.lat_ctrl.step(angle)
 
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
