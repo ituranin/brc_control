@@ -24,22 +24,31 @@ class DynamicPurePursuit:
         max_steering_angle: float = 0.75,  # [rad]
         debug: bool = False,  # print intermediate values on every step
     ):
+        self.name = "DynamicPurePursuit"
         self.wheelbase = wheelbase
         self.look_ahead_distance = look_ahead_distance
         self.curvature_reference_distance = curvature_reference_distance
         self.look_ahead_rise_limit = look_ahead_rise_limit
         self.look_ahead_descent_limit = look_ahead_descent_limit
         self.look_ahead_lut = (
-            [(0.005, 2.5), (0.001, 3.5), (0.0005, 6.0)] if look_ahead_lut is None else look_ahead_lut
+            [(0.1, 4.0), (0.01, 8.0), (0.001, 12.0)] if look_ahead_lut is None else look_ahead_lut
         )
         self.min_steering_angle = min_steering_angle
         self.max_steering_angle = max_steering_angle
         self.debug = debug
         self._look_ahead: float | None = None  # rate limiter state
+        # Last step's results, exposed for visualisation
+        self.target_point: tuple[float, float] | None = None
+        self.last_look_ahead: float | None = None
+        self.last_curvature: float | None = None  # signed curvature that went into the LUT
+        self.last_requested_look_ahead: float | None = None  # LUT output before rate limiting
 
     def reset(self) -> None:
         self._look_ahead = None
-
+        self.target_point = None
+        self.last_look_ahead = None
+        self.last_curvature = None
+        self.last_requested_look_ahead = None
     # ---------------------------------------------------------------- helpers
 
     @staticmethod
@@ -152,6 +161,8 @@ class DynamicPurePursuit:
         if curvature is not None:
             # Tighter curve -> shorter look-ahead
             requested = self._lut_eval(self.look_ahead_lut, abs(curvature))
+        self.last_requested_look_ahead = requested
+        self.last_curvature = curvature
         return self._rate_limit(requested), curvature
 
     @staticmethod
@@ -177,10 +188,13 @@ class DynamicPurePursuit:
         ordered from the vehicle outward. Returns the steering angle [rad]."""
         points = [pt for pt in points if pt[0] > 0.0]  # ignore points behind the vehicle
         if not points:
+            self.target_point = None
             return 0.0
 
         look_ahead, curvature = self._calc_look_ahead(points)
         target_x, target_y = self._point_at_distance(points, look_ahead)
+        self.target_point = (target_x, target_y)
+        self.last_look_ahead = look_ahead
         # Classic pure pursuit law: delta = atan(2 * L * sin(alpha) / l_d)
         heading_error = math.atan2(target_y, target_x)
         steering = math.atan2(2.0 * self.wheelbase * math.sin(heading_error), look_ahead)

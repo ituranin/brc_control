@@ -16,11 +16,22 @@ from brc_control.stopwatch import StopWatch
 from brc_control.controller.pid import PIDController
 from brc_control.controller.dyn_pure_pursuit import DynamicPurePursuit
 from brc_control.controller.pure_pursuit import PurePursuit
+from brc_control.visualization import DebugPublisher
 
 
 IMAGE_WIDTH = 384
 IMAGE_HEIGHT = 384
 CONTOUR_BOTTOM_OFFSET = 1
+METERS_PER_PIXEL = 30.0 / 384.0  # the top-down image covers 30 m across 384 px
+
+
+def pixels_to_vehicle_frame(points_px):
+    """Image pixels (x right, y down, vehicle at the bottom centre) -> metres in the vehicle
+    frame (x forward, y left), ordered as given."""
+    return [
+        ((IMAGE_HEIGHT - py) * METERS_PER_PIXEL, (IMAGE_WIDTH / 2 - px) * METERS_PER_PIXEL)
+        for px, py in points_px
+    ]
 
 
 # encoding -> (numpy dtype, channels)
@@ -85,7 +96,8 @@ class ControlNode(Node):
         self.v_cmd = 0.0
         self.steer_cmd = 0.0
         self.stopwatch = StopWatch()
-        self.lat_ctrl = PurePursuit(look_ahead_distance=(50.0 * (30.0 / 384.0)), wheelbase=1.53) # look ahead distance calc is pixels to meters
+        self.lat_ctrl = DynamicPurePursuit(wheelbase=1.53)
+        # self.lat_ctrl = PurePursuit(look_ahead_distance=(50.0 * (30.0 / 384.0)), wheelbase=1.53) # look ahead distance calc is pixels to meters
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -104,6 +116,7 @@ class ControlNode(Node):
         self.velocity_pid = PIDController(0.8, 0.0, 0.0, 0.0)
         
         self.distance_sensor = VirtualDistanceSensor(384)
+        self.debug_viz = DebugPublisher(self, IMAGE_WIDTH, METERS_PER_PIXEL)
 
     def image_cb(self, msg: Image):
         try:
@@ -138,12 +151,14 @@ class ControlNode(Node):
             return
         if self.wheel_fl_vel is None or self.wheel_fr_vel is None:
             return
+        if self.speed is None:  # no odometry received yet
+            return
 
         resized = self.label_map
 
         mask = get_main_path_mask(resized)
         #self.stopwatch.start()
-        steering_point, offset_point, line = steering_point_from_topdown(mask, distance=70)
+        steering_point, center_points_px, line = steering_point_from_topdown(mask, distance=70)
         #print(self.stopwatch.stop())
         angle = calculate_angle((IMAGE_WIDTH//2, IMAGE_HEIGHT), steering_point)
         angle = math.radians(angle)
@@ -162,8 +177,29 @@ class ControlNode(Node):
         ## Longitudinal control (velocity/acceleration)
         vel = 3.0
 
-        ## Lateral control (steering)
-        pp_out = self.lat_ctrl.step(angle)
+        ## Lateral control (steering), published convention: positive = left
+        points_m = pixels_to_vehicle_frame(center_points_px)
+        if self.lat_ctrl.name == "PurePursuit":
+            steering = -self.lat_ctrl.step(angle)  # angle is positive to the right of the image
+        elif self.lat_ctrl.name == "DynamicPurePursuit":
+            steering = self.lat_ctrl.step(points_m)
+        else:
+            raise ValueError(f"Unknown lateral controller: {self.lat_ctrl.name}")
+
+        # Target point: chosen by the controller if it exposes one, else the single steering point
+        target = getattr(self.lat_ctrl, 'target_point', None)
+        if target is None and self.lat_ctrl.name == "PurePursuit":
+            target = pixels_to_vehicle_frame([steering_point])[0]
+        self.debug_viz.publish(mask, points_m, target, steering)
+        if self.lat_ctrl.name == "DynamicPurePursuit":
+            self.debug_viz.publish_signals(
+                steering,
+                self.lat_ctrl.last_curvature,
+                self.lat_ctrl.last_look_ahead,
+                self.lat_ctrl.last_requested_look_ahead,
+            )
+        else:
+            self.debug_viz.publish_signals(steering)
 
         speed = speed_from_topdown(self.distance_sensor, mask)
         self.velocity_pid.set_setpoint(speed)
@@ -173,7 +209,7 @@ class ControlNode(Node):
         #print(speed, self.speed, v_pid, self.v_cmd)
         #print(angle, pid_out_steer)
 
-        self.publish_commands(steering_angle=-pp_out, speed=vel)
+        self.publish_commands(steering_angle=steering, speed=vel)
 
 
 def main():

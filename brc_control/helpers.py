@@ -163,7 +163,7 @@ def steering_point_from_topdown(track, distance=32, debug=False):
             cv2.circle(center_line, (int(steering_point[0]), int(steering_point[1])), radius=2, color=150, thickness=-1)
 
         cv2.circle(center_line, (int(point[0]), int(point[1])), radius=2, color=75, thickness=-1)
-    return point, center_points_t[0], center_line
+    return point, center_points_t, center_line
 
 def calculate_max_target_speed(distance, max_deceleration, min_speed):
     initial_speed = min_speed / 3.6  # Convert minimum speed from km/h to m/s

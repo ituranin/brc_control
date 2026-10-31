@@ -17,6 +17,7 @@ class PurePursuit:
         max_steering_angle: float = 0.75,  # [rad]
         debug: bool = False,  # print intermediate values on every step
     ):
+        self.name = "PurePursuit"
         self.wheelbase = wheelbase
         self.look_ahead_distance = look_ahead_distance
         self.min_steering_angle = min_steering_angle
