@@ -1,0 +1,19 @@
+# Parameters of the brc_control node. Values that are not listed keep the defaults from the code.
+# Live tuning: ros2 run rqt_reconfigure rqt_reconfigure   (or: ros2 param set /brc_control <name> <value>)
+# `ros2 param dump /brc_control` prints values only; copy them into the ros__parameters block below
+# (do not overwrite this file with the dump, the node name wrapper and the list format would be lost).
+brc_control:
+  ros__parameters:
+    lateral_controller: DynamicPurePursuit  # DynamicPurePursuit | PurePursuit (only read at startup)
+    velocity: 3.0  # [m/s]
+
+    wheelbase: 1.53
+    look_ahead_distance: 3.0  # fallback if no curvature is available [m]
+    curvature_reference_distance: 15.0  # distance at which the path curvature is sampled [m]
+    look_ahead_rise_limit: 0.005  # max look-ahead increase per step [m]
+    look_ahead_descent_limit: 0.1  # max look-ahead decrease per step [m]
+    # Flat list of (abs curvature [1/m], look-ahead [m]) pairs
+    look_ahead_lut: [0.1, 3.0, 0.01, 6.0, 0.001, 12.0]
+    min_steering_angle: -0.75
+    max_steering_angle: 0.75
+    debug: false

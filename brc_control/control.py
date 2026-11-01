@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from geometry_msgs.msg import Twist
@@ -96,8 +97,15 @@ class ControlNode(Node):
         self.v_cmd = 0.0
         self.steer_cmd = 0.0
         self.stopwatch = StopWatch()
-        self.lat_ctrl = DynamicPurePursuit(wheelbase=1.53)
-        # self.lat_ctrl = PurePursuit(look_ahead_distance=(50.0 * (30.0 / 384.0)), wheelbase=1.53) # look ahead distance calc is pixels to meters
+
+        controller_name = self.declare_parameter('lateral_controller', 'DynamicPurePursuit').value
+        if controller_name == "DynamicPurePursuit":
+            self.lat_ctrl = DynamicPurePursuit(wheelbase=1.53)
+        elif controller_name == "PurePursuit":
+            self.lat_ctrl = PurePursuit(look_ahead_distance=(50.0 * (30.0 / 384.0)), wheelbase=1.53) # look ahead distance calc is pixels to meters
+        else:
+            raise ValueError(f"Unknown lateral controller: {controller_name}")
+        self._declare_tunable_parameters()
 
         self.image_sub = self.create_subscription(
             Image, 'camera/seg/labels_map', self.image_cb, 1)
@@ -117,6 +125,47 @@ class ControlNode(Node):
         
         self.distance_sensor = VirtualDistanceSensor(384)
         self.debug_viz = DebugPublisher(self, IMAGE_WIDTH, METERS_PER_PIXEL)
+
+    def _declare_tunable_parameters(self):
+        """Expose the controller's numeric/bool attributes as ROS parameters (defaults = the
+        controller's own defaults), so they can be set from a YAML file or live at runtime."""
+        self.tunable = [
+            name for name, value in vars(self.lat_ctrl).items()
+            if not name.startswith(('_', 'last_')) and isinstance(value, (bool, int, float))
+        ]
+        for name in self.tunable:
+            self.declare_parameter(name, getattr(self.lat_ctrl, name))
+        # The LUT is a flat list [curvature0, look_ahead0, curvature1, look_ahead1, ...]
+        if hasattr(self.lat_ctrl, 'look_ahead_lut'):
+            self.declare_parameter(
+                'look_ahead_lut', [float(v) for node in self.lat_ctrl.look_ahead_lut for v in node])
+        self.vel = self.declare_parameter('velocity', 3.0).value
+
+        # Apply values from the YAML file, then keep listening for live changes
+        self._apply_parameters(self.get_parameters(self._tunable_names()))
+        self.add_on_set_parameters_callback(self._on_parameters)
+
+    def _tunable_names(self):
+        extra = ['velocity'] + (['look_ahead_lut'] if hasattr(self.lat_ctrl, 'look_ahead_lut') else [])
+        return self.tunable + extra
+
+    def _apply_parameters(self, params):
+        for p in params:
+            if p.name == 'velocity':
+                self.vel = p.value
+            elif p.name == 'look_ahead_lut':
+                v = list(p.value)
+                self.lat_ctrl.look_ahead_lut = list(zip(v[0::2], v[1::2]))
+            elif p.name in self.tunable:
+                setattr(self.lat_ctrl, p.name, p.value)
+
+    def _on_parameters(self, params):
+        for p in params:
+            if p.name == 'look_ahead_lut' and (len(p.value) < 4 or len(p.value) % 2):
+                return SetParametersResult(
+                    successful=False, reason='look_ahead_lut needs >= 2 (curvature, look_ahead) pairs')
+        self._apply_parameters(params)
+        return SetParametersResult(successful=True)
 
     def image_cb(self, msg: Image):
         try:
@@ -175,7 +224,7 @@ class ControlNode(Node):
 
         # Select control strategy
         ## Longitudinal control (velocity/acceleration)
-        vel = 3.0
+        vel = self.vel
 
         ## Lateral control (steering), published convention: positive = left
         points_m = pixels_to_vehicle_frame(center_points_px)
