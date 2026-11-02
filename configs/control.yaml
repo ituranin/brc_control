@@ -9,7 +9,6 @@ brc_control:
 
     wheelbase: 1.53
     look_ahead_distance: 3.0  # fallback if no curvature is available [m]
-    curvature_reference_distance: 15.0  # distance at which the path curvature is sampled [m]
     look_ahead_rise_limit: 0.005  # max look-ahead increase per step [m]
     look_ahead_descent_limit: 0.1  # max look-ahead decrease per step [m]
     # Flat list of (abs curvature [1/m], look-ahead [m]) pairs

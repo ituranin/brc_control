@@ -6,16 +6,20 @@ import math
 class DynamicPurePursuit:
     """Dynamic pure pursuit on a given target trajectory.
 
-    Per step: curvature per path point -> curvature at a reference point -> look-ahead via LUT
-    -> asymmetric rate limit -> classic pure pursuit towards the path point at that look-ahead.
-    Only the look-ahead rate limiter state is kept between steps.
+    Per step:
+      1. steer with the current look-ahead distance (LAD): pure pursuit towards the path point
+         at that distance;
+      2. evaluate the path curvature at that same distance;
+      3. map it through the LUT (tighter curve -> shorter LAD) and move the LAD towards that
+         value with an asymmetric rate limit -> the LAD of the next step.
+    On straights the LAD therefore grows step by step, when a curve shows up it shrinks quickly.
+    The only state kept between steps is the LAD (initialised with `look_ahead_distance`).
     """
 
     def __init__(
         self,
         wheelbase: float = 2.7,
-        look_ahead_distance: float = 3.0,  # default / fallback look-ahead [m]
-        curvature_reference_distance: float = 2.0,  # distance from the vehicle at which the curvature is sampled [m]
+        look_ahead_distance: float = 3.0,  # initial / fallback look-ahead [m]
         look_ahead_rise_limit: float | None = 0.02,  # max look-ahead increase per step [m]; None disables rate limiting
         look_ahead_descent_limit: float | None = 0.5,  # max look-ahead decrease per step [m]
         # (abs curvature [1/m], look-ahead distance [m]) nodes
@@ -27,7 +31,6 @@ class DynamicPurePursuit:
         self.name = "DynamicPurePursuit"
         self.wheelbase = wheelbase
         self.look_ahead_distance = look_ahead_distance
-        self.curvature_reference_distance = curvature_reference_distance
         self.look_ahead_rise_limit = look_ahead_rise_limit
         self.look_ahead_descent_limit = look_ahead_descent_limit
         self.look_ahead_lut = (
@@ -36,11 +39,11 @@ class DynamicPurePursuit:
         self.min_steering_angle = min_steering_angle
         self.max_steering_angle = max_steering_angle
         self.debug = debug
-        self._look_ahead: float | None = None  # rate limiter state
+        self._look_ahead: float | None = None  # state: LAD used in the next step
         # Last step's results, exposed for visualisation
         self.target_point: tuple[float, float] | None = None
-        self.last_look_ahead: float | None = None
-        self.last_curvature: float | None = None  # signed curvature that went into the LUT
+        self.last_look_ahead: float | None = None  # LAD that was used for the steering
+        self.last_curvature: float | None = None  # signed curvature at that LAD
         self.last_requested_look_ahead: float | None = None  # LUT output before rate limiting
 
     def reset(self) -> None:
@@ -49,6 +52,7 @@ class DynamicPurePursuit:
         self.last_look_ahead = None
         self.last_curvature = None
         self.last_requested_look_ahead = None
+
     # ---------------------------------------------------------------- helpers
 
     @staticmethod
@@ -129,41 +133,42 @@ class DynamicPurePursuit:
                 curvatures[i] = cls._calc_curvature_backward(points[i], prev, pp)
         return curvatures
 
-    def _reference_curvature(self, points) -> float | None:
-        """Curvature of the path point whose distance to the vehicle is closest to the reference distance."""
+    def _curvature_at(self, points, distance: float) -> float | None:
+        """Curvature at the given distance from the vehicle, linearly interpolated between the
+        two neighbouring path points; clamped to the first/last valid point if the distance lies
+        outside the path."""
         curvatures = self._point_curvatures(points)
         valid = [
-            (pt, c) for pt, c in zip(points, curvatures) if c is not None and math.isfinite(c)
+            (math.hypot(*pt), c)
+            for pt, c in zip(points, curvatures)
+            if c is not None and math.isfinite(c)
         ]
         if not valid:
             return None
-        _, curvature = min(
-            valid, key=lambda v: abs(math.hypot(*v[0]) - self.curvature_reference_distance)
-        )
-        return curvature
+        if distance <= valid[0][0]:
+            return valid[0][1]
+        for (d0, c0), (d1, c1) in zip(valid, valid[1:]):
+            if d0 <= distance <= d1:
+                if d1 - d0 < 1e-9:
+                    return c0
+                return c0 + (distance - d0) / (d1 - d0) * (c1 - c0)
+        return valid[-1][1]
 
-    def _rate_limit(self, requested: float) -> float:
+    def _rate_limit(self, current: float, requested: float) -> float:
         """Asymmetric rate limiter: slow increase, fast decrease of the look-ahead distance."""
         if self.look_ahead_rise_limit is None or self.look_ahead_descent_limit is None:
             return requested
-        if self._look_ahead is None:  # first call: start at the requested value
-            self._look_ahead = requested
-        else:
-            delta = requested - self._look_ahead
-            delta = max(-self.look_ahead_descent_limit, min(self.look_ahead_rise_limit, delta))
-            self._look_ahead += delta
-        return self._look_ahead
+        delta = requested - current
+        return current + max(-self.look_ahead_descent_limit, min(self.look_ahead_rise_limit, delta))
 
-    def _calc_look_ahead(self, points) -> tuple[float, float | None]:
-        """Returns (look-ahead distance [m], sampled curvature [1/m] or None if unavailable)."""
-        requested = self.look_ahead_distance  # fallback if no curvature/LUT is available
-        curvature = self._reference_curvature(points) if self.look_ahead_lut else None
-        if curvature is not None:
-            # Tighter curve -> shorter look-ahead
-            requested = self._lut_eval(self.look_ahead_lut, abs(curvature))
-        self.last_requested_look_ahead = requested
-        self.last_curvature = curvature
-        return self._rate_limit(requested), curvature
+    def _next_look_ahead(self, points, current: float) -> tuple[float, float | None, float | None]:
+        """Returns (look-ahead for the next step, curvature at `current`, LUT output).
+        Without a usable curvature (or LUT) the look-ahead is held."""
+        curvature = self._curvature_at(points, current) if self.look_ahead_lut else None
+        if curvature is None:
+            return current, None, None
+        requested = self._lut_eval(self.look_ahead_lut, abs(curvature))  # tighter curve -> shorter
+        return self._rate_limit(current, requested), curvature, requested
 
     @staticmethod
     def _point_at_distance(points, distance: float) -> tuple[float, float]:
@@ -191,13 +196,22 @@ class DynamicPurePursuit:
             self.target_point = None
             return 0.0
 
-        look_ahead, curvature = self._calc_look_ahead(points)
+        if self._look_ahead is None:
+            self._look_ahead = self.look_ahead_distance
+        look_ahead = self._look_ahead
+
+        # 1. Classic pure pursuit with the current look-ahead
         target_x, target_y = self._point_at_distance(points, look_ahead)
         self.target_point = (target_x, target_y)
         self.last_look_ahead = look_ahead
-        # Classic pure pursuit law: delta = atan(2 * L * sin(alpha) / l_d)
+        # Pure pursuit law: delta = atan(2 * L * sin(alpha) / l_d)
         heading_error = math.atan2(target_y, target_x)
         steering = math.atan2(2.0 * self.wheelbase * math.sin(heading_error), look_ahead)
+
+        # 2. + 3. Curvature at that look-ahead -> look-ahead for the next step
+        self._look_ahead, curvature, requested = self._next_look_ahead(points, look_ahead)
+        self.last_curvature = curvature
+        self.last_requested_look_ahead = requested
         if self.debug:
             curvature_str = "n/a" if curvature is None else f"{curvature:.4f}"
             print(f"curvature: {curvature_str} look_ahead: {look_ahead:.4f} "
