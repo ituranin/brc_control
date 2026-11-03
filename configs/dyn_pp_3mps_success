@@ -1,0 +1,19 @@
+debug: false
+lateral_controller: DynamicPurePursuit
+look_ahead_descent_limit: 0.1
+look_ahead_distance: 3.0
+look_ahead_lut: !!python/object/apply:array.array
+- d
+- - 0.1
+  - 3.0
+  - 0.01
+  - 6.0
+  - 0.001
+  - 12.0
+look_ahead_rise_limit: 0.01
+max_steering_angle: 0.75
+min_steering_angle: -0.75
+start_type_description_service: true
+use_sim_time: false
+velocity: 3.0
+wheelbase: 1.53

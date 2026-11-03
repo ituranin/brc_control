@@ -13,7 +13,13 @@ class DynamicPurePursuit:
       3. map it through the LUT (tighter curve -> shorter LAD) and move the LAD towards that
          value with an asymmetric rate limit -> the LAD of the next step.
     On straights the LAD therefore grows step by step, when a curve shows up it shrinks quickly.
-    The only state kept between steps is the LAD (initialised with `look_ahead_distance`).
+    The only steering state kept between steps is the LAD (initialised with `look_ahead_distance`).
+
+    Optional longitudinal control (`dynamic_velocity=True`): the LAD used for steering is mapped
+    through `velocity_lut` (long LAD -> fast, short LAD -> slow), clamped to
+    [min_velocity, max_velocity] and rate limited like the LAD (slow acceleration, fast braking).
+    `step()` returns (steering, velocity); velocity is None when `dynamic_velocity` is off, so the
+    caller can keep using a static velocity.
     """
 
     def __init__(
@@ -27,6 +33,13 @@ class DynamicPurePursuit:
         min_steering_angle: float = -0.75,  # [rad]
         max_steering_angle: float = 0.75,  # [rad]
         debug: bool = False,  # print intermediate values on every step
+        dynamic_velocity: bool = False,  # also return a target velocity derived from the LAD
+        # (look-ahead distance [m], velocity [m/s]) nodes
+        velocity_lut: list[tuple[float, float]] | None = None,
+        min_velocity: float = 1.0,  # [m/s]
+        max_velocity: float = 10.0,  # [m/s]
+        velocity_rise_limit: float | None = 0.03,  # max velocity increase per step [m/s]; None disables rate limiting
+        velocity_descent_limit: float | None = 0.1,  # max velocity decrease per step [m/s]
     ):
         self.name = "DynamicPurePursuit"
         self.wheelbase = wheelbase
@@ -39,12 +52,21 @@ class DynamicPurePursuit:
         self.min_steering_angle = min_steering_angle
         self.max_steering_angle = max_steering_angle
         self.debug = debug
+        self.dynamic_velocity = dynamic_velocity
+        self.velocity_lut = [(3.0, 2.0), (6.0, 3.0), (12.0, 5.0)] if velocity_lut is None else velocity_lut
+        self.min_velocity = min_velocity
+        self.max_velocity = max_velocity
+        self.velocity_rise_limit = velocity_rise_limit
+        self.velocity_descent_limit = velocity_descent_limit
+        self._velocity: float | None = None  # state: last target velocity
         self._look_ahead: float | None = None  # state: LAD used in the next step
         # Last step's results, exposed for visualisation
         self.target_point: tuple[float, float] | None = None
         self.last_look_ahead: float | None = None  # LAD that was used for the steering
         self.last_curvature: float | None = None  # signed curvature at that LAD
         self.last_requested_look_ahead: float | None = None  # LUT output before rate limiting
+        self.last_velocity: float | None = None  # target velocity returned by the last step
+        self.last_requested_velocity: float | None = None  # velocity LUT output before rate limiting
 
     def reset(self) -> None:
         self._look_ahead = None
@@ -52,6 +74,9 @@ class DynamicPurePursuit:
         self.last_look_ahead = None
         self.last_curvature = None
         self.last_requested_look_ahead = None
+        self._velocity = None
+        self.last_velocity = None
+        self.last_requested_velocity = None
 
     # ---------------------------------------------------------------- helpers
 
@@ -154,12 +179,23 @@ class DynamicPurePursuit:
                 return c0 + (distance - d0) / (d1 - d0) * (c1 - c0)
         return valid[-1][1]
 
-    def _rate_limit(self, current: float, requested: float) -> float:
-        """Asymmetric rate limiter: slow increase, fast decrease of the look-ahead distance."""
-        if self.look_ahead_rise_limit is None or self.look_ahead_descent_limit is None:
+    @staticmethod
+    def _rate_limit(current: float, requested: float, rise_limit, descent_limit) -> float:
+        """Asymmetric per-step rate limiter; a None limit disables limiting."""
+        if rise_limit is None or descent_limit is None:
             return requested
         delta = requested - current
-        return current + max(-self.look_ahead_descent_limit, min(self.look_ahead_rise_limit, delta))
+        return current + max(-descent_limit, min(rise_limit, delta))
+
+    def _next_velocity(self, look_ahead: float) -> float:
+        """Target velocity for the LAD that is used for steering in this step."""
+        requested = self._lut_eval(self.velocity_lut, look_ahead)
+        requested = max(self.min_velocity, min(self.max_velocity, requested))
+        self.last_requested_velocity = requested
+        current = self.min_velocity if self._velocity is None else self._velocity  # start slow
+        self._velocity = self._rate_limit(
+            current, requested, self.velocity_rise_limit, self.velocity_descent_limit)
+        return self._velocity
 
     def _next_look_ahead(self, points, current: float) -> tuple[float, float | None, float | None]:
         """Returns (look-ahead for the next step, curvature at `current`, LUT output).
@@ -168,7 +204,8 @@ class DynamicPurePursuit:
         if curvature is None:
             return current, None, None
         requested = self._lut_eval(self.look_ahead_lut, abs(curvature))  # tighter curve -> shorter
-        return self._rate_limit(current, requested), curvature, requested
+        return (self._rate_limit(current, requested, self.look_ahead_rise_limit, self.look_ahead_descent_limit),
+                curvature, requested)
 
     @staticmethod
     def _point_at_distance(points, distance: float) -> tuple[float, float]:
@@ -188,13 +225,14 @@ class DynamicPurePursuit:
             return ax + t * dx, ay + t * dy
         return points[-1]
 
-    def step(self, points) -> float:
+    def step(self, points) -> tuple[float, float | None]:
         """points: [(x, y), ...] target trajectory in the vehicle frame (x forward, y left),
-        ordered from the vehicle outward. Returns the steering angle [rad]."""
+        ordered from the vehicle outward. Returns (steering angle [rad], target velocity [m/s]);
+        the velocity is None if `dynamic_velocity` is off (or not available yet)."""
         points = [pt for pt in points if pt[0] > 0.0]  # ignore points behind the vehicle
         if not points:
             self.target_point = None
-            return 0.0
+            return 0.0, self._velocity if self.dynamic_velocity else None  # hold the last velocity
 
         if self._look_ahead is None:
             self._look_ahead = self.look_ahead_distance
@@ -212,9 +250,13 @@ class DynamicPurePursuit:
         self._look_ahead, curvature, requested = self._next_look_ahead(points, look_ahead)
         self.last_curvature = curvature
         self.last_requested_look_ahead = requested
+
+        # 4. Optional: target velocity from the LAD used in this step
+        velocity = self._next_velocity(look_ahead) if self.dynamic_velocity and self.velocity_lut else None
+        self.last_velocity = velocity
         if self.debug:
             curvature_str = "n/a" if curvature is None else f"{curvature:.4f}"
             print(f"curvature: {curvature_str} look_ahead: {look_ahead:.4f} "
                   f"target: ({target_x:.4f}, {target_y:.4f}) "
-                  f"heading_error: {heading_error:.4f} steering: {steering:.4f}")
-        return max(self.min_steering_angle, min(self.max_steering_angle, steering))
+                  f"heading_error: {heading_error:.4f} steering: {steering:.4f} velocity: {velocity}")
+        return max(self.min_steering_angle, min(self.max_steering_angle, steering)), velocity

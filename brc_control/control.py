@@ -135,10 +135,10 @@ class ControlNode(Node):
         ]
         for name in self.tunable:
             self.declare_parameter(name, getattr(self.lat_ctrl, name))
-        # The LUT is a flat list [curvature0, look_ahead0, curvature1, look_ahead1, ...]
-        if hasattr(self.lat_ctrl, 'look_ahead_lut'):
-            self.declare_parameter(
-                'look_ahead_lut', [float(v) for node in self.lat_ctrl.look_ahead_lut for v in node])
+        # LUTs are flat lists [x0, y0, x1, y1, ...]
+        self.luts = [name for name in vars(self.lat_ctrl) if name.endswith('_lut')]
+        for name in self.luts:
+            self.declare_parameter(name, [float(v) for node in getattr(self.lat_ctrl, name) for v in node])
         self.vel = self.declare_parameter('velocity', 3.0).value
 
         # Apply values from the YAML file, then keep listening for live changes
@@ -146,24 +146,23 @@ class ControlNode(Node):
         self.add_on_set_parameters_callback(self._on_parameters)
 
     def _tunable_names(self):
-        extra = ['velocity'] + (['look_ahead_lut'] if hasattr(self.lat_ctrl, 'look_ahead_lut') else [])
-        return self.tunable + extra
+        return self.tunable + self.luts + ['velocity']
 
     def _apply_parameters(self, params):
         for p in params:
             if p.name == 'velocity':
                 self.vel = p.value
-            elif p.name == 'look_ahead_lut':
+            elif p.name in self.luts:
                 v = list(p.value)
-                self.lat_ctrl.look_ahead_lut = list(zip(v[0::2], v[1::2]))
+                setattr(self.lat_ctrl, p.name, list(zip(v[0::2], v[1::2])))
             elif p.name in self.tunable:
                 setattr(self.lat_ctrl, p.name, p.value)
 
     def _on_parameters(self, params):
         for p in params:
-            if p.name == 'look_ahead_lut' and (len(p.value) < 4 or len(p.value) % 2):
+            if p.name in self.luts and (len(p.value) < 4 or len(p.value) % 2):
                 return SetParametersResult(
-                    successful=False, reason='look_ahead_lut needs >= 2 (curvature, look_ahead) pairs')
+                    successful=False, reason=f'{p.name} needs >= 2 (x, y) pairs')
         self._apply_parameters(params)
         return SetParametersResult(successful=True)
 
@@ -223,15 +222,18 @@ class ControlNode(Node):
         #print(offset)
 
         # Select control strategy
-        ## Longitudinal control (velocity/acceleration)
+        ## Longitudinal control: static `velocity` parameter, unless the controller provides one
         vel = self.vel
+        lon_ctrl_mode = "controlled" 
 
         ## Lateral control (steering), published convention: positive = left
         points_m = pixels_to_vehicle_frame(center_points_px)
         if self.lat_ctrl.name == "PurePursuit":
             steering = -self.lat_ctrl.step(angle)  # angle is positive to the right of the image
         elif self.lat_ctrl.name == "DynamicPurePursuit":
-            steering = self.lat_ctrl.step(points_m)
+            steering, target_vel = self.lat_ctrl.step(points_m)
+            if target_vel is not None and lon_ctrl_mode == "controlled":
+                vel = target_vel
         else:
             raise ValueError(f"Unknown lateral controller: {self.lat_ctrl.name}")
 
@@ -246,6 +248,8 @@ class ControlNode(Node):
                 self.lat_ctrl.last_curvature,
                 self.lat_ctrl.last_look_ahead,
                 self.lat_ctrl.last_requested_look_ahead,
+                self.lat_ctrl.last_requested_velocity,
+                vel,
             )
         else:
             self.debug_viz.publish_signals(steering)

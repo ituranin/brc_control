@@ -18,6 +18,7 @@ class DebugPublisher:
     - debug/markers (MarkerArray): path points, chosen target point, steering line
     - debug/steering (Float64): steering angle [rad] that is published to cmd_vel (positive = left)
     - debug/curvature, debug/look_ahead, debug/look_ahead_requested (Float64): dynamic pure pursuit signals
+    - debug/velocity_requested, debug/velocity_cmd (Float64): velocity LUT output and the commanded velocity [m/s]
 
     In rviz set the Fixed Frame to `frame_id` (default "brc_vehicle").
     """
@@ -31,16 +32,20 @@ class DebugPublisher:
         self.marker_pub = node.create_publisher(MarkerArray, 'debug/markers', 1)
         self.signal_pubs = {
             name: node.create_publisher(Float64, f'debug/{name}', 1)
-            for name in ('steering', 'curvature', 'look_ahead', 'look_ahead_requested')
+            for name in ('steering', 'curvature', 'look_ahead', 'look_ahead_requested',
+                         'velocity_requested', 'velocity_cmd')
         }
 
-    def publish_signals(self, steering, curvature=None, look_ahead=None, look_ahead_requested=None):
+    def publish_signals(self, steering, curvature=None, look_ahead=None, look_ahead_requested=None,
+                        velocity_requested=None, velocity_cmd=None):
         """Scalar signals for rqt_plot / PlotJuggler. None is published as NaN (plots as a gap)."""
         values = {
             'steering': steering,
             'curvature': curvature,
             'look_ahead': look_ahead,
             'look_ahead_requested': look_ahead_requested,
+            'velocity_requested': velocity_requested,
+            'velocity_cmd': velocity_cmd,
         }
         for name, value in values.items():
             self.signal_pubs[name].publish(Float64(data=float('nan') if value is None else float(value)))

@@ -69,3 +69,13 @@ Notes:
 - Nothing is saved. Run `ros2 param dump /brc_control` and copy the values into `configs/control.yaml` so they survive a restart.
 - `lateral_controller` is only read at startup, so changing it live has no effect.
 - A value in `configs/control.yaml` overrides the default in the controller class at startup. To change a default in the code, remove that parameter from the YAML or edit it there, and restart the node (a running node never reloads its code).
+
+## Dynamic velocity
+
+With `DynamicPurePursuit` the target speed can follow the look-ahead distance (LAD): long LAD (straight) is fast, short LAD (curve) is slow.
+
+- Enable with `dynamic_velocity: true` (default `false`, then the static `velocity` parameter is used).
+- `velocity_lut`: flat list of `[look_ahead, velocity, ...]` pairs, the result is clamped to `min_velocity` / `max_velocity`.
+- `velocity_rise_limit` / `velocity_descent_limit`: max change per control step (30 Hz), slow acceleration and fast braking.
+- `step()` returns `(steering, velocity)`, `velocity` is `None` when dynamic velocity is off.
+- Signals: `debug/velocity_requested` (LUT output) and `debug/velocity_cmd` (commanded velocity).
